@@ -472,21 +472,17 @@ var (
 		"error",
 	})
 
-	ingressRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	ingressRequestsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: MetricsNamespace,
 		Name:      "tips_ingress_requests_total",
 		Help:      "Count of total requests forwarded to TIPS ingress service.",
-	}, []string{
-		"backend_name",
 	})
 
-	ingressRequestDurationSumm = promauto.NewSummaryVec(prometheus.SummaryOpts{
+	ingressRequestDurationSum = promauto.NewSummary(prometheus.SummaryOpts{
 		Namespace:  MetricsNamespace,
 		Name:       "tips_ingress_request_duration_seconds",
 		Help:       "Summary of TIPS ingress request response times broken down by backend.",
 		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.95: 0.005, 0.99: 0.001},
-	}, []string{
-		"backend_name",
 	})
 )
 
@@ -661,12 +657,12 @@ func RecordBackendGroupMulticallCompletion(bg *BackendGroup, backendName string,
 	backendGroupMulticallCompletionCounter.WithLabelValues(bg.Name, backendName, error).Inc()
 }
 
-func RecordIngressRequest(backendName string) {
-	ingressRequestsTotal.WithLabelValues(backendName).Inc()
+func RecordIngressRequest() {
+	ingressRequestsTotal.Inc()
 }
 
-func RecordIngressRequestDuration(backendName string, duration time.Duration) {
-	ingressRequestDurationSumm.WithLabelValues(backendName).Observe(duration.Seconds())
+func RecordIngressRequestDuration(duration time.Duration) {
+	ingressRequestDurationSum.Observe(duration.Seconds())
 }
 
 func boolToFloat64(b bool) float64 {

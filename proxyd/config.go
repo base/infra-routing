@@ -126,8 +126,6 @@ type BackendConfig struct {
 	ConsensusSkipPeerCountCheck bool   `toml:"consensus_skip_peer_count"`
 	ConsensusForcedCandidate    bool   `toml:"consensus_forced_candidate"`
 	ConsensusReceiptsTarget     string `toml:"consensus_receipts_target"`
-
-	IngressRPC string `toml:"ingress_rpc"`
 }
 
 type BackendsConfig map[string]*BackendConfig
@@ -236,6 +234,7 @@ type Config struct {
 	WhitelistErrorMessage   string                  `toml:"whitelist_error_message"`
 	SenderRateLimit         SenderRateLimitConfig   `toml:"sender_rate_limit"`
 	InteropValidationConfig InteropValidationConfig `toml:"interop_validation"`
+	IngressRPC              string                  `toml:"ingress_rpc"`
 }
 
 type InteropValidationConfig struct {
