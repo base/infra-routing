@@ -618,6 +618,10 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 
 						ingressStart := time.Now()
 						req, err := http.NewRequest(http.MethodPost, s.ingressRpc, bytes.NewBuffer(body))
+						if err != nil {
+							log.Warn("unable to create HTTP request", "source", "rpc", "err", err)
+							return
+						}
 						req.Header.Set("Content-Type", "application/json")
 
 						resp, err := s.ingressRpcClient.Do(req)
@@ -646,6 +650,10 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 
 						ingressStart := time.Now()
 						req, err := http.NewRequest(http.MethodPost, s.ingressRpc, bytes.NewBuffer(body))
+						if err != nil {
+							log.Warn("unable to create HTTP request", "source", "rpc", "err", err)
+							return
+						}
 						req.Header.Set("Content-Type", "application/json")
 
 						resp, err := s.ingressRpcClient.Do(req)

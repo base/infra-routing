@@ -137,6 +137,7 @@ func TestClientDisconnectionFlow499(t *testing.T) {
 		InteropValidationConfig{},              // interopValidatingConfig
 		NewFirstSupervisorStrategy([]string{}), // interopStrategy
 		false,                                  // enableTxHashLogging
+		"",                                     // ingressRpc
 	)
 	require.NoError(t, err)
 
@@ -198,7 +199,6 @@ func TestIngressForwarding(t *testing.T) {
 		backendServer.URL,
 		"",
 		semaphore.NewWeighted(10),
-		WithIngressRPC(ingressServer.URL),
 	)
 
 	// Create a test RPC request
