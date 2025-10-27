@@ -228,7 +228,7 @@ func NewServer(
 				return http.ErrUseLastResponse
 			},
 		},
-		enableTxHashLogging:     enableTxHashLogging,
+		enableTxHashLogging: enableTxHashLogging,
 	}, nil
 }
 
@@ -631,6 +631,37 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 					}()
 				}
 			}
+		}
+
+		// Handle eth_sendBundle - only send to ingress RPC if configured
+		if parsedReq.Method == "eth_sendBundle" {
+			// Send to ingress service only if configured
+			if s.ingressRpc != "" {
+				body, err := json.Marshal(parsedReq)
+				if err != nil {
+					log.Error("unable to marshal JSON RPC request for bundle", "source", "rpc", "err", err)
+				} else {
+					go func() {
+						RecordIngressRequest()
+
+						ingressStart := time.Now()
+						req, err := http.NewRequest(http.MethodPost, s.ingressRpc, bytes.NewBuffer(body))
+						req.Header.Set("Content-Type", "application/json")
+
+						resp, err := s.ingressRpcClient.Do(req)
+						if err != nil {
+							log.Warn("failed to proxy bundle to ingress rpc", "err", err)
+							return
+						}
+
+						defer resp.Body.Close()
+						RecordIngressRequestDuration(time.Since(ingressStart))
+					}()
+				}
+			}
+			// Return success response for eth_sendBundle
+			responses[i] = NewRPCRes(parsedReq.ID, json.RawMessage(`"0x0"`))
+			continue
 		}
 
 		id := string(parsedReq.ID)
