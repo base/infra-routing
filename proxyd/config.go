@@ -234,6 +234,7 @@ type Config struct {
 	WhitelistErrorMessage   string                  `toml:"whitelist_error_message"`
 	SenderRateLimit         SenderRateLimitConfig   `toml:"sender_rate_limit"`
 	InteropValidationConfig InteropValidationConfig `toml:"interop_validation"`
+	IngressRPC              string                  `toml:"ingress_rpc"`
 }
 
 type InteropValidationConfig struct {

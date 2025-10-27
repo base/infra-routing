@@ -1,6 +1,7 @@
 package proxyd
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -87,6 +88,8 @@ type Server struct {
 	interopValidatingConfig InteropValidationConfig
 	interopStrategy         InteropStrategy
 	publicAccess            bool
+	ingressRpc              string
+	ingressRpcClient        *http.Client
 	enableTxHashLogging     bool
 }
 
@@ -116,6 +119,7 @@ func NewServer(
 	interopValidatingConfig InteropValidationConfig,
 	interopStrategy InteropStrategy,
 	enableTxHashLogging bool,
+	ingressRpc string,
 ) (*Server, error) {
 	if cache == nil {
 		cache = &NoopRPCCache{}
@@ -217,6 +221,13 @@ func NewServer(
 		rateLimitHeader:         rateLimitHeader,
 		interopValidatingConfig: interopValidatingConfig,
 		interopStrategy:         interopStrategy,
+		ingressRpc:              ingressRpc,
+		ingressRpcClient: &http.Client{
+			Timeout: defaultRPCTimeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		enableTxHashLogging:     enableTxHashLogging,
 	}, nil
 }
@@ -596,6 +607,30 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 				continue
 			}
 
+			// Send async copy to ingress service, don't wait for error handling
+			if s.ingressRpc != "" {
+				body, err := json.Marshal(parsedReq)
+				if err != nil {
+					log.Error("unable to marshal JSON RPC request", "source", "rpc", "err", err)
+				} else {
+					go func() {
+						RecordIngressRequest()
+
+						ingressStart := time.Now()
+						req, err := http.NewRequest(http.MethodPost, s.ingressRpc, bytes.NewBuffer(body))
+						req.Header.Set("Content-Type", "application/json")
+
+						resp, err := s.ingressRpcClient.Do(req)
+						if err != nil {
+							log.Warn("failed to proxy to ingress rpc", "err", err)
+							return
+						}
+
+						defer resp.Body.Close()
+						RecordIngressRequestDuration(time.Since(ingressStart))
+					}()
+				}
+			}
 		}
 
 		id := string(parsedReq.ID)
