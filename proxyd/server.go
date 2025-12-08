@@ -630,7 +630,10 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 							return
 						}
 
-						defer resp.Body.Close()
+						// must read body and close the response for keepalived conns
+						_, _ = io.ReadAll(resp.Body)
+						_ = resp.Body.Close()
+
 						RecordIngressRequestDuration(time.Since(ingressStart))
 					}()
 				}
