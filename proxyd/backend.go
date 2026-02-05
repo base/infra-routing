@@ -1037,6 +1037,10 @@ func (bg *BackendGroup) Forward(ctx context.Context, rpcReqs []*RPCReq, isBatch 
 
 	var backends []*Backend
 
+	// Use sender hash routing strategy if it is set and the request is a single sendRawTransaction,
+	// sendRawTransactionConditional, or sendRawTransactionSync request.
+	//
+	// Note: Non-sendRawTransaction requests are not supported by sender hash routing.
 	if bg.routingStrategy == SenderHashRoutingStrategy &&
 		len(rpcReqs) == 1 &&
 		!isBatch &&
@@ -1298,6 +1302,10 @@ func (bg *BackendGroup) orderedBackendsForRequest() []*Backend {
 	}
 }
 
+// orderedBackendsForSenderHash returns the ordered backends for a sender hash routing request.
+// If the sender hash routing strategy is not set or the router is not initialized, it falls back to the default ordering.
+// If the request is not a single sendRawTransaction, sendRawTransactionConditional, or sendRawTransactionSync request, it falls back to the default ordering.
+// If the request is a single sendRawTransaction, sendRawTransactionConditional, or sendRawTransactionSync request, it returns the ordered backends for the sender hash routing.
 func (bg *BackendGroup) orderedBackendsForSenderHash(ctx context.Context, req *RPCReq) []*Backend {
 	if bg.senderHashRouter == nil {
 		log.Warn("sender_hash routing strategy configured but no router initialized, falling back to default ordering",
@@ -1307,6 +1315,7 @@ func (bg *BackendGroup) orderedBackendsForSenderHash(ctx context.Context, req *R
 		return bg.orderedBackendsForRequest()
 	}
 
+	// Get the transaction information
 	tx, err := parseRawTx(req)
 	if err != nil {
 		log.Warn("failed to parse transaction for sender_hash routing, falling back to default ordering",
@@ -1317,6 +1326,7 @@ func (bg *BackendGroup) orderedBackendsForSenderHash(ctx context.Context, req *R
 		return bg.orderedBackendsForRequest()
 	}
 
+	// Get the sender from the transaction to use for consistent routing
 	senderAddr, err := ExtractSenderFromTx(ctx, tx)
 	if err != nil {
 		log.Warn("failed to extract sender for sender_hash routing, falling back to default ordering",
@@ -1327,6 +1337,8 @@ func (bg *BackendGroup) orderedBackendsForSenderHash(ctx context.Context, req *R
 		return bg.orderedBackendsForRequest()
 	}
 
+	// Use the sender address and determine the backends suitable. The ordering
+	// is determine by health followed by the Highest Random Weighted score.
 	backends := bg.senderHashRouter.OrderedBackendsForSender(senderAddr, bg.Backends)
 	if len(backends) == 0 {
 		log.Warn("sender_hash routing returned no backends, falling back to default ordering",

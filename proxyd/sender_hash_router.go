@@ -1,10 +1,12 @@
 package proxyd
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -12,38 +14,27 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+// SenderHashRouter is a router that selects a backend for a sender address based on the sender hash.
 type SenderHashRouter struct {
 	salt []byte
 }
 
+// scoredBackend is a backend with a score and a healthy flag.
+type scoredBackend struct {
+	backend *Backend
+	score   uint64
+	healthy bool
+}
+
+// NewSenderHashRouter creates a new sender hash router with the given salt.
 func NewSenderHashRouter(salt string) *SenderHashRouter {
 	return &SenderHashRouter{salt: []byte(salt)}
 }
 
-func (r *SenderHashRouter) SelectBackend(senderAddress common.Address, backends []*Backend) *Backend {
-	healthyBackends := filterHealthyBackends(backends)
-	if len(healthyBackends) == 0 {
-		return nil
-	}
-
-	if len(healthyBackends) == 1 {
-		return healthyBackends[0]
-	}
-
-	var selectedBackend *Backend
-	var maxScore uint64
-
-	for _, backend := range healthyBackends {
-		score := r.computeScore(senderAddress, backend.Name)
-		if score > maxScore {
-			maxScore = score
-			selectedBackend = backend
-		}
-	}
-
-	return selectedBackend
-}
-
+// computeScore implements Highest Random Weighted hashing by computing
+// a score from hash(senderAddress + salt + backendName).
+//
+// It returns the first 8 bytes of the hash as a uint64.
 func (r *SenderHashRouter) computeScore(senderAddress common.Address, backendName string) uint64 {
 	h := sha256.New()
 	h.Write(senderAddress.Bytes())
@@ -53,17 +44,15 @@ func (r *SenderHashRouter) computeScore(senderAddress common.Address, backendNam
 	return binary.BigEndian.Uint64(hash[:8])
 }
 
+// OrderedBackendsForSender returns the ordered backends for the given sender address.
 func (r *SenderHashRouter) OrderedBackendsForSender(senderAddress common.Address, backends []*Backend) []*Backend {
 	if len(backends) == 0 {
 		return nil
 	}
 
-	type scoredBackend struct {
-		backend *Backend
-		score   uint64
-		healthy bool
-	}
-
+	// Get the health and score for each backend and sort it
+	//
+	// Note: `b.IsHealthy()` calls on the backend's probeSpec to check if the backend is healthy.
 	scored := make([]scoredBackend, len(backends))
 	for i, b := range backends {
 		scored[i] = scoredBackend{
@@ -72,25 +61,7 @@ func (r *SenderHashRouter) OrderedBackendsForSender(senderAddress common.Address
 			healthy: b.IsHealthy(),
 		}
 	}
-
-	for i := 0; i < len(scored)-1; i++ {
-		for j := i + 1; j < len(scored); j++ {
-			swapNeeded := false
-			if scored[i].healthy && scored[j].healthy {
-				swapNeeded = scored[j].score > scored[i].score
-			} else if !scored[i].healthy && scored[j].healthy {
-				swapNeeded = true
-			} else if scored[i].healthy && !scored[j].healthy {
-				swapNeeded = false
-			} else {
-				swapNeeded = scored[j].score > scored[i].score
-			}
-
-			if swapNeeded {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
-		}
-	}
+	sortScoredBackends(scored)
 
 	result := make([]*Backend, len(scored))
 	for i, sb := range scored {
@@ -100,16 +71,21 @@ func (r *SenderHashRouter) OrderedBackendsForSender(senderAddress common.Address
 	return result
 }
 
-func filterHealthyBackends(backends []*Backend) []*Backend {
-	healthy := make([]*Backend, 0, len(backends))
-	for _, b := range backends {
-		if b.IsHealthy() {
-			healthy = append(healthy, b)
+// sortScoredBackends sorts backends by health (healthy first) then by score (descending).
+// `slices.SortFunc` is O(n log n).
+func sortScoredBackends(scored []scoredBackend) {
+	slices.SortFunc(scored, func(a, b scoredBackend) int {
+		if a.healthy != b.healthy {
+			if a.healthy {
+				return -1
+			}
+			return 1
 		}
-	}
-	return healthy
+		return cmp.Compare(b.score, a.score)
+	})
 }
 
+// ExtractSenderFromTx extracts the sender from the transaction.
 func ExtractSenderFromTx(ctx context.Context, tx *types.Transaction) (common.Address, error) {
 	var signer types.Signer
 	if tx.ChainId().Sign() == 0 {
@@ -127,12 +103,14 @@ func ExtractSenderFromTx(ctx context.Context, tx *types.Transaction) (common.Add
 	return from, nil
 }
 
+// IsSendRawTransactionMethod checks if the method is a sendRawTransaction equivalent method.
 func IsSendRawTransactionMethod(method string) bool {
 	return method == "eth_sendRawTransaction" ||
 		method == "eth_sendRawTransactionConditional" ||
 		method == "eth_sendRawTransactionSync"
 }
 
+// parseRawTx parses the raw transaction from the request parameters.
 func parseRawTx(req *RPCReq) (*types.Transaction, error) {
 	var params []string
 	if err := json.Unmarshal(req.Params, &params); err != nil {

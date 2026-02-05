@@ -368,6 +368,8 @@ func Start(config *Config) (*Server, func(), error) {
 			maxBlockRange = bg.MaxBlockRange
 		}
 
+		// Verify that the salt is set for sender hash routing strategy.
+		// If the salt is not set, it will fall back to the default ordering.
 		var senderHashRouter *SenderHashRouter
 		if bg.RoutingStrategy == SenderHashRoutingStrategy {
 			salt, err := ReadFromEnvOrConfig(bg.SenderHashSalt)
