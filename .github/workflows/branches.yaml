@@ -8,6 +8,9 @@ on:
     branches:
       - 'main'
 
+permissions:
+  contents: read
+
 jobs:
   local:
     # only build if the push is to a local branch, or if the PR is to main from a local branch
