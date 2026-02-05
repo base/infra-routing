@@ -137,8 +137,6 @@ type BackendConfig struct {
 	ConsensusForcedCandidate    bool   `toml:"consensus_forced_candidate"`
 	ConsensusReceiptsTarget     string `toml:"consensus_receipts_target"`
 	AllowedStatusCodes          []int  `toml:"allowed_status_codes"`
-
-	IngressRPC string `toml:"ingress_rpc"`
 }
 
 type BackendsConfig map[string]*BackendConfig

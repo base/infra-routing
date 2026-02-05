@@ -185,10 +185,6 @@ func Start(config *Config) (*Server, func(), error) {
 			opts = append(opts, WithProbe(cfg.ProbeURL, cfg.ProbeFailureThreshold, cfg.ProbeSuccessThreshold, cfg.ProbePeriodSeconds, cfg.ProbeTimeoutSeconds))
 		}
 
-		if cfg.IngressRPC != "" {
-			opts = append(opts, WithIngressRPC(cfg.IngressRPC))
-		}
-
 		headers := map[string]string{}
 		for headerName, headerValue := range cfg.Headers {
 			headerValue, err := ReadFromEnvOrConfig(headerValue)
