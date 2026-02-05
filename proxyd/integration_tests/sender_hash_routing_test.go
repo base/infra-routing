@@ -3,6 +3,7 @@ package integration_tests
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,9 +43,50 @@ func newTrackingBackend(handler http.Handler) *trackingBackend {
 }
 
 // Handler returns a handler that tracks the number of requests it has served.
+// It detects batch requests and returns a proper batch response.
 func (t *trackingBackend) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&t.requestCount, 1)
+
+		// Read the request body to detect if it's a batch
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(500)
+			return
+		}
+		defer r.Body.Close()
+
+		// Check if it's a batch request (starts with '[')
+		trimmed := bytes.TrimSpace(body)
+		if len(trimmed) > 0 && trimmed[0] == '[' {
+			// Parse the batch to get the IDs
+			var reqs []json.RawMessage
+			if err := json.Unmarshal(trimmed, &reqs); err != nil {
+				w.WriteHeader(500)
+				return
+			}
+
+			// Build batch response with matching IDs
+			var responses []map[string]interface{}
+			for _, req := range reqs {
+				var r map[string]interface{}
+				if err := json.Unmarshal(req, &r); err != nil {
+					continue
+				}
+				responses = append(responses, map[string]interface{}{
+					"jsonrpc": "2.0",
+					"result":  "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+					"id":      r["id"],
+				})
+			}
+
+			w.WriteHeader(200)
+			respBytes, _ := json.Marshal(responses)
+			_, _ = w.Write(respBytes)
+			return
+		}
+
+		// Single request
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte(senderHashTxAccepted))
 	})
@@ -232,6 +274,126 @@ func TestSenderHashRouting(t *testing.T) {
 			totalRequests += node.GetRequestCount()
 		}
 		require.Equal(t, 1, totalRequests)
+	})
+}
+
+func TestSenderHashRoutingBatch(t *testing.T) {
+	t.Run("Batch with multiple senders routes to different backends", func(t *testing.T) {
+		nodes, _, svr, shutdown := setupSenderHash(t)
+		defer shutdown()
+
+		// batch with 2 different senders
+		batch := `[
+			{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["` + senderHashTxHex1 + `"],"id":1},
+			{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["` + senderHashTxHex2 + `"],"id":2}
+		]`
+
+		req, _ := http.NewRequest("POST", "https://1.1.1.1:8080", bytes.NewReader([]byte(batch)))
+		req.Header.Set("X-Forwarded-For", "203.0.113.1")
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		svr.HandleRPC(rr, req)
+
+		resp := rr.Result()
+		defer resp.Body.Close()
+		require.Equal(t, 200, resp.StatusCode)
+
+		var rpcRes []*proxyd.RPCRes
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&rpcRes))
+		require.Len(t, rpcRes, 2)
+
+		backendsWithRequests := 0
+		totalRequests := 0
+		for _, node := range nodes {
+			count := node.GetRequestCount()
+			totalRequests += count
+			// If the backend received any requests, it should have received exactly 1 request.
+			if count > 0 {
+				require.Equal(t, 1, count, "each backend should receive exactly 1 request")
+				backendsWithRequests++
+			}
+		}
+		require.Equal(t, 2, totalRequests, "total requests should be 2")
+		require.Equal(t, 2, backendsWithRequests, "exactly 2 backends should receive requests")
+	})
+
+	t.Run("Batch with same sender routes to single backend", func(t *testing.T) {
+		nodes, _, svr, shutdown := setupSenderHash(t)
+		defer shutdown()
+
+		// batch with 3 requests from the same sender
+		batch := `[
+			{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["` + senderHashTxHex1 + `"],"id":1},
+			{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["` + senderHashTxHex1 + `"],"id":2},
+			{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["` + senderHashTxHex1 + `"],"id":3}
+		]`
+
+		req, _ := http.NewRequest("POST", "https://1.1.1.1:8080", bytes.NewReader([]byte(batch)))
+		req.Header.Set("X-Forwarded-For", "203.0.113.1")
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		svr.HandleRPC(rr, req)
+
+		resp := rr.Result()
+		defer resp.Body.Close()
+		require.Equal(t, 200, resp.StatusCode)
+
+		var rpcRes []*proxyd.RPCRes
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&rpcRes))
+		require.Len(t, rpcRes, 3)
+
+		backendsWithRequests := 0
+		totalRequests := 0
+		for _, node := range nodes {
+			count := node.GetRequestCount()
+			totalRequests += count
+			if count > 0 {
+				require.Equal(t, 1, count, "receiving backend should get exactly 1 batch request")
+				backendsWithRequests++
+			}
+		}
+		require.Equal(t, 1, totalRequests, "total requests should be 1 (single batch)")
+		require.Equal(t, 1, backendsWithRequests, "exactly 1 backend should receive the batch")
+	})
+
+	t.Run("Batch with mixed methods splits correctly", func(t *testing.T) {
+		nodes, _, svr, shutdown := setupSenderHash(t)
+		defer shutdown()
+
+		// batch with 3 requests, 1 sender-routed, 1 default, 1 sender-routed
+		batch := `[
+			{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["` + senderHashTxHex1 + `"],"id":1},
+			{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x1234567890123456789012345678901234567890"},"latest"],"id":2},
+			{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["` + senderHashTxHex2 + `"],"id":3}
+		]`
+
+		req, _ := http.NewRequest("POST", "https://1.1.1.1:8080", bytes.NewReader([]byte(batch)))
+		req.Header.Set("X-Forwarded-For", "203.0.113.1")
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		svr.HandleRPC(rr, req)
+
+		resp := rr.Result()
+		defer resp.Body.Close()
+		require.Equal(t, 200, resp.StatusCode)
+
+		var rpcRes []*proxyd.RPCRes
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&rpcRes))
+		require.Len(t, rpcRes, 3)
+
+		backendsWithRequests := 0
+		totalRequests := 0
+		for _, node := range nodes {
+			count := node.GetRequestCount()
+			totalRequests += count
+			if count > 0 {
+				backendsWithRequests++
+			}
+		}
+		// total requests should be 3 (2 sender-routed + 1 default)
+		// at least 2 backends should receive requests (2 different senders)
+		require.Equal(t, 3, totalRequests, "total requests should be 3 (2 sender-routed + 1 default)")
+		require.GreaterOrEqual(t, backendsWithRequests, 2, "at least 2 backends should receive requests (2 different senders)")
 	})
 }
 

@@ -9,8 +9,6 @@ import (
 	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -50,12 +48,9 @@ func (r *SenderHashRouter) OrderedBackendsForSender(senderAddress common.Address
 		return nil
 	}
 
-	// Get the health and score for each backend and sort it
-	//
-	// Note: `b.IsHealthy()` calls on the backend's probeSpec to check if the backend is healthy.
-	scored := make([]scoredBackend, len(backends))
+	scored := make([]*scoredBackend, len(backends))
 	for i, b := range backends {
-		scored[i] = scoredBackend{
+		scored[i] = &scoredBackend{
 			backend: b,
 			score:   r.computeScore(senderAddress, b.Name),
 			healthy: b.IsHealthy(),
@@ -72,9 +67,8 @@ func (r *SenderHashRouter) OrderedBackendsForSender(senderAddress common.Address
 }
 
 // sortScoredBackends sorts backends by health (healthy first) then by score (descending).
-// `slices.SortFunc` is O(n log n).
-func sortScoredBackends(scored []scoredBackend) {
-	slices.SortFunc(scored, func(a, b scoredBackend) int {
+func sortScoredBackends(scored []*scoredBackend) {
+	slices.SortFunc(scored, func(a, b *scoredBackend) int {
 		if a.healthy != b.healthy {
 			if a.healthy {
 				return -1
@@ -85,24 +79,6 @@ func sortScoredBackends(scored []scoredBackend) {
 	})
 }
 
-// ExtractSenderFromTx extracts the sender from the transaction.
-func ExtractSenderFromTx(ctx context.Context, tx *types.Transaction) (common.Address, error) {
-	var signer types.Signer
-	if tx.ChainId().Sign() == 0 {
-		signer = new(types.HomesteadSigner)
-	} else {
-		signer = types.LatestSignerForChainID(tx.ChainId())
-	}
-
-	from, err := types.Sender(signer, tx)
-	if err != nil {
-		log.Debug("failed to extract sender from transaction", "err", err, "req_id", GetReqID(ctx))
-		return common.Address{}, err
-	}
-
-	return from, nil
-}
-
 // IsSendRawTransactionMethod checks if the method is a sendRawTransaction equivalent method.
 func IsSendRawTransactionMethod(method string) bool {
 	return method == "eth_sendRawTransaction" ||
@@ -110,26 +86,52 @@ func IsSendRawTransactionMethod(method string) bool {
 		method == "eth_sendRawTransactionSync"
 }
 
-// ParseRawTx parses the raw transaction from the request parameters.
-func ParseRawTx(req *RPCReq) (*types.Transaction, error) {
-	var params []string
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		return nil, err
+// SplitBatchBySender splits a batch of RPC requests into groups based on sender address.
+// Returns a map of sender address to requests, plus requests that should use default routing.
+func (r *SenderHashRouter) SplitBatchBySender(ctx context.Context, reqs []*RPCReq) (map[common.Address][]*RPCReq, []*RPCReq) {
+	senderReqs := make(map[common.Address][]*RPCReq)
+	var defaultReqs []*RPCReq
+
+	// Find out which requests are sendRawTransaction requests and which are not.
+	for _, req := range reqs {
+		if !IsSendRawTransactionMethod(req.Method) {
+			defaultReqs = append(defaultReqs, req)
+			continue
+		}
+
+		// Parse the transaction parameters
+		var params []string
+		if err := json.Unmarshal(req.Params, &params); err != nil || len(params) == 0 {
+			log.Debug("failed to parse tx params, using default routing",
+				"req_id", GetReqID(ctx),
+				"err", err,
+			)
+			defaultReqs = append(defaultReqs, req)
+			continue
+		}
+		tx, err := decodeSignedTx(ctx, params[0])
+		if err != nil {
+			log.Debug("failed to decode tx, using default routing",
+				"req_id", GetReqID(ctx),
+				"err", err,
+			)
+			defaultReqs = append(defaultReqs, req)
+			continue
+		}
+
+		// Extract the sender address from the transaction
+		sender, err := getSender(tx)
+		if err != nil {
+			log.Debug("failed to extract sender, using default routing",
+				"req_id", GetReqID(ctx),
+				"err", err,
+			)
+			defaultReqs = append(defaultReqs, req)
+			continue
+		}
+
+		senderReqs[sender] = append(senderReqs[sender], req)
 	}
 
-	if len(params) == 0 {
-		return nil, ErrInvalidParams("missing transaction data")
-	}
-
-	var data hexutil.Bytes
-	if err := data.UnmarshalText([]byte(params[0])); err != nil {
-		return nil, err
-	}
-
-	tx := new(types.Transaction)
-	if err := tx.UnmarshalBinary(data); err != nil {
-		return nil, err
-	}
-
-	return tx, nil
+	return senderReqs, defaultReqs
 }

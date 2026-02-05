@@ -1035,21 +1035,6 @@ func (bg *BackendGroup) Forward(ctx context.Context, rpcReqs []*RPCReq, isBatch 
 		return nil, "", nil
 	}
 
-	var backends []*Backend
-
-	// Use sender hash routing strategy if it is set and the request is a single sendRawTransaction,
-	// sendRawTransactionConditional, or sendRawTransactionSync request.
-	//
-	// Note: Non-sendRawTransaction requests are not supported by sender hash routing.
-	if bg.GetRoutingStrategy() == SenderHashRoutingStrategy &&
-		len(rpcReqs) == 1 &&
-		!isBatch &&
-		IsSendRawTransactionMethod(rpcReqs[0].Method) {
-		backends = bg.orderedBackendsForSenderHash(ctx, rpcReqs[0])
-	} else {
-		backends = bg.orderedBackendsForRequest()
-	}
-
 	overriddenResponses := make([]*indexedReqRes, 0)
 	rewrittenReqs := make([]*RPCReq, 0, len(rpcReqs))
 
@@ -1071,6 +1056,83 @@ func (bg *BackendGroup) Forward(ctx context.Context, rpcReqs []*RPCReq, isBatch 
 		return backendResp.RPCRes, backendResp.ServedBy, backendResp.error
 	}
 
+	// For sender_hash routing, split batch by sender and forward to appropriate backends
+	if bg.GetRoutingStrategy() == SenderHashRoutingStrategy && bg.senderHashRouter != nil {
+		return bg.forwardWithSenderHashRouting(ctx, rpcReqs, isBatch, overriddenResponses)
+	}
+
+	backends := bg.orderedBackendsForRequest()
+	return bg.forwardToBackends(ctx, rpcReqs, backends, isBatch, overriddenResponses)
+}
+
+// forwardWithSenderHashRouting handles sender_hash routing for both single requests and batches.
+func (bg *BackendGroup) forwardWithSenderHashRouting(ctx context.Context, rpcReqs []*RPCReq, isBatch bool, overriddenResponses []*indexedReqRes) ([]*RPCRes, string, error) {
+	senderReqs, defaultReqs := bg.senderHashRouter.SplitBatchBySender(ctx, rpcReqs)
+
+	if len(senderReqs) == 0 {
+		backends := bg.orderedBackendsForRequest()
+		return bg.forwardToBackends(ctx, rpcReqs, backends, isBatch, overriddenResponses)
+	}
+
+	type result struct {
+		responses []*RPCRes
+		servedBy  string
+		err       error
+	}
+	resultCh := make(chan result, len(senderReqs)+1)
+
+	// For all sendRawTransaction requests, route to the appropriate backend based on the sender hash
+	for sender, reqs := range senderReqs {
+		go func(s common.Address, r []*RPCReq) {
+			// Get the available ordered backends based on the sender hash
+			backends := bg.senderHashRouter.OrderedBackendsForSender(s, bg.Backends)
+
+			// Forward the requests to the appropriate backend
+			res, servedBy, err := bg.forwardToBackends(ctx, r, backends, len(r) > 1, nil)
+			resultCh <- result{res, servedBy, err}
+		}(sender, reqs)
+	}
+
+	// All other requests don't use consistent hashing ordering
+	//
+	// NOTE: It is possible that other requests are routed to the same backend as the sender requests.
+	if len(defaultReqs) > 0 {
+		go func() {
+			backends := bg.orderedBackendsForRequest()
+			res, servedBy, err := bg.forwardToBackends(ctx, defaultReqs, backends, len(defaultReqs) > 1, nil)
+			resultCh <- result{res, servedBy, err}
+		}()
+	}
+
+	expectedResults := len(senderReqs)
+	if len(defaultReqs) > 0 {
+		expectedResults++
+	}
+
+	var allResponses []*RPCRes
+	var servedBy string
+	for i := 0; i < expectedResults; i++ {
+		r := <-resultCh
+		if r.err != nil {
+			log.Error("error in sender_hash batch forward",
+				"req_id", GetReqID(ctx),
+				"err", r.err,
+			)
+			continue
+		}
+		allResponses = append(allResponses, r.responses...)
+		if servedBy == "" {
+			servedBy = r.servedBy
+		}
+	}
+
+	res := OverrideResponses(allResponses, overriddenResponses)
+	sortBatchRPCResponse(rpcReqs, res)
+	return res, servedBy, nil
+}
+
+// forwardToBackends forwards requests to the given backends and returns the response.
+func (bg *BackendGroup) forwardToBackends(ctx context.Context, rpcReqs []*RPCReq, backends []*Backend, isBatch bool, overriddenResponses []*indexedReqRes) ([]*RPCRes, string, error) {
 	ch := make(chan BackendGroupRPCResponse)
 	go func() {
 		defer close(ch)
@@ -1300,63 +1362,6 @@ func (bg *BackendGroup) orderedBackendsForRequest() []*Backend {
 		}
 		return append(healthy, unhealthy...)
 	}
-}
-
-// orderedBackendsForSenderHash returns the ordered backends for a sender hash routing request.
-// If the sender hash routing strategy is not set or the router is not initialized, it falls back to the default ordering.
-// If the request is not a single sendRawTransaction, sendRawTransactionConditional, or sendRawTransactionSync request, it falls back to the default ordering.
-// If the request is a single sendRawTransaction, sendRawTransactionConditional, or sendRawTransactionSync request, it returns the ordered backends for the sender hash routing.
-func (bg *BackendGroup) orderedBackendsForSenderHash(ctx context.Context, req *RPCReq) []*Backend {
-	if bg.senderHashRouter == nil {
-		log.Warn("sender_hash routing strategy configured but no router initialized, falling back to default ordering",
-			"backend_group", bg.Name,
-			"req_id", GetReqID(ctx),
-		)
-		return bg.orderedBackendsForRequest()
-	}
-
-	// Get the transaction information
-	tx, err := ParseRawTx(req)
-	if err != nil {
-		log.Warn("failed to parse transaction for sender_hash routing, falling back to default ordering",
-			"backend_group", bg.Name,
-			"req_id", GetReqID(ctx),
-			"err", err,
-		)
-		return bg.orderedBackendsForRequest()
-	}
-
-	// Get the sender from the transaction to use for consistent routing
-	senderAddr, err := ExtractSenderFromTx(ctx, tx)
-	if err != nil {
-		log.Warn("failed to extract sender for sender_hash routing, falling back to default ordering",
-			"backend_group", bg.Name,
-			"req_id", GetReqID(ctx),
-			"err", err,
-		)
-		return bg.orderedBackendsForRequest()
-	}
-
-	// Use the sender address and determine the backends suitable. The ordering
-	// is determine by health followed by the Highest Random Weighted score.
-	backends := bg.senderHashRouter.OrderedBackendsForSender(senderAddr, bg.Backends)
-	if len(backends) == 0 {
-		log.Warn("sender_hash routing returned no backends, falling back to default ordering",
-			"backend_group", bg.Name,
-			"req_id", GetReqID(ctx),
-			"sender", senderAddr.Hex(),
-		)
-		return bg.orderedBackendsForRequest()
-	}
-
-	log.Debug("using sender_hash routing",
-		"backend_group", bg.Name,
-		"req_id", GetReqID(ctx),
-		"sender", senderAddr.Hex(),
-		"primary_backend", backends[0].Name,
-	)
-
-	return backends
 }
 
 func (bg *BackendGroup) loadBalancedConsensusGroup() []*Backend {

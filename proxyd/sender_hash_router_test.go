@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -22,7 +20,7 @@ func createMockBackend(name string, healthy bool) *Backend {
 // TestSortScoredBackends tests the sortScoredBackends function.
 func TestSortScoredBackends(t *testing.T) {
 	t.Run("healthy backends sorted before unhealthy", func(t *testing.T) {
-		scored := []scoredBackend{
+		scored := []*scoredBackend{
 			{backend: &Backend{Name: "unhealthy-1"}, score: 100, healthy: false},
 			{backend: &Backend{Name: "healthy-1"}, score: 50, healthy: true},
 			{backend: &Backend{Name: "unhealthy-2"}, score: 200, healthy: false},
@@ -38,7 +36,7 @@ func TestSortScoredBackends(t *testing.T) {
 	})
 
 	t.Run("within same health status sorted by score descending", func(t *testing.T) {
-		scored := []scoredBackend{
+		scored := []*scoredBackend{
 			{backend: &Backend{Name: "low"}, score: 10, healthy: true},
 			{backend: &Backend{Name: "high"}, score: 100, healthy: true},
 			{backend: &Backend{Name: "mid"}, score: 50, healthy: true},
@@ -52,7 +50,7 @@ func TestSortScoredBackends(t *testing.T) {
 	})
 
 	t.Run("unhealthy backends also sorted by score descending", func(t *testing.T) {
-		scored := []scoredBackend{
+		scored := []*scoredBackend{
 			{backend: &Backend{Name: "low"}, score: 10, healthy: false},
 			{backend: &Backend{Name: "high"}, score: 100, healthy: false},
 			{backend: &Backend{Name: "mid"}, score: 50, healthy: false},
@@ -66,13 +64,13 @@ func TestSortScoredBackends(t *testing.T) {
 	})
 
 	t.Run("empty slice", func(t *testing.T) {
-		scored := []scoredBackend{}
+		scored := []*scoredBackend{}
 		sortScoredBackends(scored)
 		require.Empty(t, scored)
 	})
 
 	t.Run("single element", func(t *testing.T) {
-		scored := []scoredBackend{
+		scored := []*scoredBackend{
 			{backend: &Backend{Name: "only"}, score: 42, healthy: true},
 		}
 		sortScoredBackends(scored)
@@ -81,7 +79,7 @@ func TestSortScoredBackends(t *testing.T) {
 	})
 
 	t.Run("mixed health and scores", func(t *testing.T) {
-		scored := []scoredBackend{
+		scored := []*scoredBackend{
 			{backend: &Backend{Name: "u-low"}, score: 5, healthy: false},
 			{backend: &Backend{Name: "h-high"}, score: 100, healthy: true},
 			{backend: &Backend{Name: "u-high"}, score: 200, healthy: false},
@@ -322,100 +320,6 @@ func TestIsSendRawTransactionMethod(t *testing.T) {
 	}
 }
 
-// TestExtractSenderFromTx verifies that the sender address is correctly extracted
-// from a signed transaction.
-func TestExtractSenderFromTx(t *testing.T) {
-	tests := []struct {
-		name           string
-		txHex          string
-		expectedSender string
-	}{
-		{
-			name: "EIP-1559 tx on chain 420",
-			txHex: "0x02f8b28201a406849502f931849502f931830147f9948f3ddd0fbf3e78ca1d6c" +
-				"d17379ed88e261249b5280b84447e7ef2400000000000000000000000089c8b1" +
-				"b2774201bac50f627403eac1b732459cf7000000000000000000000000000000" +
-				"0000000000000000056bc75e2d63100000c080a0473c95566026c312c9664cd6" +
-				"1145d2f3e759d49209fe96011ac012884ec5b017a0763b58f6fa6096e6ba28ee" +
-				"08bfac58f58fb3b8bcef5af98578bdeaddf40bde42",
-			expectedSender: "0x155c651ABd923B19f7b5440F23d3ba1a57784876",
-		},
-		{
-			name: "simple transfer on chain 420",
-			txHex: "0x02f8758201a48217fd84773594008504a817c80082520894be53e587975603" +
-				"a13d0923d0aa6d37c5233dd750865af3107a400080c080a04aefbd5819c35729" +
-				"138fe26b6ae1783ebf08d249b356c2f920345db97877f3f7a008d5ae92560a3c" +
-				"65f723439887205713af7ce7d7f6b24fba198f2afa03435867",
-			expectedSender: "0xbe53E587975603A13D0923D0AA6d37C5233DD750",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := hexutil.Decode(tt.txHex)
-			require.NoError(t, err)
-
-			tx := new(types.Transaction)
-			err = tx.UnmarshalBinary(data)
-			require.NoError(t, err)
-
-			sender, err := ExtractSenderFromTx(context.Background(), tx)
-			require.NoError(t, err)
-			require.Equal(t, tt.expectedSender, sender.Hex())
-		})
-	}
-}
-
-// TestParseRawTx verifies that raw transaction hex is correctly parsed.
-func TestParseRawTx(t *testing.T) {
-	t.Run("invalid params", func(t *testing.T) {
-		req := &RPCReq{
-			Method: "eth_sendRawTransaction",
-			Params: []byte(`"not an array"`),
-		}
-
-		_, err := ParseRawTx(req)
-		require.Error(t, err)
-	})
-
-	t.Run("empty params", func(t *testing.T) {
-		req := &RPCReq{
-			Method: "eth_sendRawTransaction",
-			Params: []byte(`[]`),
-		}
-
-		_, err := ParseRawTx(req)
-		require.Error(t, err)
-	})
-
-	t.Run("invalid hex", func(t *testing.T) {
-		req := &RPCReq{
-			Method: "eth_sendRawTransaction",
-			Params: []byte(`["not-valid-hex"]`),
-		}
-
-		_, err := ParseRawTx(req)
-		require.Error(t, err)
-	})
-
-	t.Run("valid hex", func(t *testing.T) {
-		validTxHex := "0x02f8b28201a406849502f931849502f931830147f9948f3ddd0fbf3e78ca1d6c" +
-			"d17379ed88e261249b5280b84447e7ef2400000000000000000000000089c8b1" +
-			"b2774201bac50f627403eac1b732459cf7000000000000000000000000000000" +
-			"0000000000000000056bc75e2d63100000c080a0473c95566026c312c9664cd6" +
-			"1145d2f3e759d49209fe96011ac012884ec5b017a0763b58f6fa6096e6ba28ee" +
-			"08bfac58f58fb3b8bcef5af98578bdeaddf40bde42"
-		req := &RPCReq{
-			Method: "eth_sendRawTransaction",
-			Params: []byte(`["` + validTxHex + `"]`),
-		}
-
-		tx, err := ParseRawTx(req)
-		require.NoError(t, err)
-		require.NotNil(t, tx)
-	})
-}
-
 // TestSenderHashRouter_DifferentSendersDistribute verifies that different senders
 // are distributed across multiple backends (not all routed to the same one).
 func TestSenderHashRouter_DifferentSendersDistribute(t *testing.T) {
@@ -443,4 +347,88 @@ func TestSenderHashRouter_DifferentSendersDistribute(t *testing.T) {
 	}
 
 	require.GreaterOrEqual(t, len(selections), 2)
+}
+
+// TestSplitBatchBySender verifies that batch requests are correctly split by sender.
+func TestSplitBatchBySender(t *testing.T) {
+	router := NewSenderHashRouter("batch-split-salt")
+
+	txHex1 := "0x02f8b28201a406849502f931849502f931830147f9948f3ddd0fbf3e78ca1d6c" +
+		"d17379ed88e261249b5280b84447e7ef2400000000000000000000000089c8b1" +
+		"b2774201bac50f627403eac1b732459cf7000000000000000000000000000000" +
+		"0000000000000000056bc75e2d63100000c080a0473c95566026c312c9664cd6" +
+		"1145d2f3e759d49209fe96011ac012884ec5b017a0763b58f6fa6096e6ba28ee" +
+		"08bfac58f58fb3b8bcef5af98578bdeaddf40bde42"
+
+	txHex2 := "0x02f8758201a48217fd84773594008504a817c80082520894be53e587975603" +
+		"a13d0923d0aa6d37c5233dd750865af3107a400080c080a04aefbd5819c35729" +
+		"138fe26b6ae1783ebf08d249b356c2f920345db97877f3f7a008d5ae92560a3c" +
+		"65f723439887205713af7ce7d7f6b24fba198f2afa03435867"
+
+	t.Run("splits sendRawTx by sender", func(t *testing.T) {
+		reqs := []*RPCReq{
+			{Method: "eth_sendRawTransaction", Params: []byte(`["` + txHex1 + `"]`), ID: []byte(`1`)},
+			{Method: "eth_sendRawTransaction", Params: []byte(`["` + txHex2 + `"]`), ID: []byte(`2`)},
+		}
+
+		senderReqs, defaultReqs := router.SplitBatchBySender(context.Background(), reqs)
+
+		require.Empty(t, defaultReqs, "no requests should fall back to default routing")
+		require.Len(t, senderReqs, 2, "two different senders should map to entries")
+
+		totalReqs := 0
+		for _, reqs := range senderReqs {
+			totalReqs += len(reqs)
+		}
+		require.Equal(t, 2, totalReqs)
+	})
+
+	t.Run("non-sendRawTx goes to default", func(t *testing.T) {
+		reqs := []*RPCReq{
+			{Method: "eth_sendRawTransaction", Params: []byte(`["` + txHex1 + `"]`), ID: []byte(`1`)},
+			{Method: "eth_call", Params: []byte(`[{}]`), ID: []byte(`2`)},
+			{Method: "eth_getBalance", Params: []byte(`["0x123", "latest"]`), ID: []byte(`3`)},
+		}
+
+		senderReqs, defaultReqs := router.SplitBatchBySender(context.Background(), reqs)
+
+		require.Len(t, defaultReqs, 2, "eth_call and eth_getBalance should use default routing")
+		require.Len(t, senderReqs, 1, "one sendRawTx should be routed by sender")
+	})
+
+	t.Run("same sender txs grouped together", func(t *testing.T) {
+		reqs := []*RPCReq{
+			{Method: "eth_sendRawTransaction", Params: []byte(`["` + txHex1 + `"]`), ID: []byte(`1`)},
+			{Method: "eth_sendRawTransaction", Params: []byte(`["` + txHex1 + `"]`), ID: []byte(`2`)},
+			{Method: "eth_sendRawTransaction", Params: []byte(`["` + txHex1 + `"]`), ID: []byte(`3`)},
+		}
+
+		senderReqs, defaultReqs := router.SplitBatchBySender(context.Background(), reqs)
+
+		require.Empty(t, defaultReqs)
+		require.Len(t, senderReqs, 1, "all txs from same sender should be grouped")
+
+		for _, reqs := range senderReqs {
+			require.Len(t, reqs, 3, "all 3 requests should be grouped")
+		}
+	})
+
+	t.Run("invalid tx falls back to default", func(t *testing.T) {
+		reqs := []*RPCReq{
+			{Method: "eth_sendRawTransaction", Params: []byte(`["0xinvalid"]`), ID: []byte(`1`)},
+			{Method: "eth_sendRawTransaction", Params: []byte(`["` + txHex1 + `"]`), ID: []byte(`2`)},
+		}
+
+		senderReqs, defaultReqs := router.SplitBatchBySender(context.Background(), reqs)
+
+		require.Len(t, defaultReqs, 1, "invalid tx should fall back to default")
+		require.Len(t, senderReqs, 1, "valid tx should be routed by sender")
+	})
+
+	t.Run("empty batch", func(t *testing.T) {
+		senderReqs, defaultReqs := router.SplitBatchBySender(context.Background(), []*RPCReq{})
+
+		require.Empty(t, senderReqs)
+		require.Empty(t, defaultReqs)
+	})
 }
