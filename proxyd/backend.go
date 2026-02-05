@@ -1104,11 +1104,14 @@ func (bg *BackendGroup) forwardWithSenderHashRouting(ctx context.Context, rpcReq
 		}()
 	}
 
+	// Calculate how many goroutine results to collect:
+	// one per sender group + one for defaultReqs (if any)
 	expectedResults := len(senderReqs)
 	if len(defaultReqs) > 0 {
 		expectedResults++
 	}
 
+	// Collect responses from all parallel goroutines
 	var allResponses []*RPCRes
 	var servedBy string
 	for i := 0; i < expectedResults; i++ {
