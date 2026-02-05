@@ -110,8 +110,8 @@ func IsSendRawTransactionMethod(method string) bool {
 		method == "eth_sendRawTransactionSync"
 }
 
-// parseRawTx parses the raw transaction from the request parameters.
-func parseRawTx(req *RPCReq) (*types.Transaction, error) {
+// ParseRawTx parses the raw transaction from the request parameters.
+func ParseRawTx(req *RPCReq) (*types.Transaction, error) {
 	var params []string
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return nil, err

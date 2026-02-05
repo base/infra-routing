@@ -28,17 +28,20 @@ const senderHashTxHex2 = "0x02f8758201a48217fd84773594008504a817c80082520894be53
 const senderHashTxAccepted = `{"jsonrpc": "2.0","result": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef","id": 1}`
 const senderHashDummyRes = `{"id": 123, "jsonrpc": "2.0", "result": "dummy"}`
 
+// trackingBackend is a backend that tracks the number of requests it has served.
 type trackingBackend struct {
 	*MockBackend
 	requestCount int32
 }
 
+// newTrackingBackend creates a new tracking backend with the given handler.
 func newTrackingBackend(handler http.Handler) *trackingBackend {
 	return &trackingBackend{
 		MockBackend: NewMockBackend(handler),
 	}
 }
 
+// Handler returns a handler that tracks the number of requests it has served.
 func (t *trackingBackend) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&t.requestCount, 1)
@@ -47,10 +50,12 @@ func (t *trackingBackend) Handler() http.Handler {
 	})
 }
 
+// GetRequestCount returns the number of requests it has served.
 func (t *trackingBackend) GetRequestCount() int {
 	return int(atomic.LoadInt32(&t.requestCount))
 }
 
+// ResetRequestCount resets the number of requests it has served.
 func (t *trackingBackend) ResetRequestCount() {
 	atomic.StoreInt32(&t.requestCount, 0)
 }
@@ -105,6 +110,7 @@ func TestSenderHashRouting(t *testing.T) {
 		nodes, _, svr, shutdown := setupSenderHash(t)
 		defer shutdown()
 
+		// Send 5 requests from the same sender to proxyd.
 		for i := 0; i < 5; i++ {
 			body := makeSenderHashRawTx(senderHashTxHex1)
 			req, _ := http.NewRequest("POST", "https://1.1.1.1:8080", bytes.NewReader(body))
@@ -117,20 +123,20 @@ func TestSenderHashRouting(t *testing.T) {
 			require.Equal(t, 200, resp.StatusCode)
 		}
 
-		totalRequests := 0
-		for _, node := range nodes {
-			totalRequests += node.GetRequestCount()
-		}
-		require.Equal(t, 5, totalRequests)
-
-		receivingBackends := 0
-		for _, node := range nodes {
-			if node.GetRequestCount() > 0 {
-				receivingBackends++
-				require.Equal(t, 5, node.GetRequestCount())
+		var receivingNode string
+		for name, node := range nodes {
+			count := node.GetRequestCount()
+			// If there was a request, then that backend should have received all 5 requests.
+			if count > 0 {
+				require.Equal(t, 5, count, "receiving backend should get all 5 requests")
+				require.Empty(t, receivingNode, "only one backend should receive requests")
+				receivingNode = name
+			} else {
+				// All other backends should get zero requests.
+				require.Equal(t, 0, count, "non-receiving backends should get zero requests")
 			}
 		}
-		require.Equal(t, 1, receivingBackends, "All requests from same sender should go to exactly one backend")
+		require.NotEmpty(t, receivingNode, "one backend should have received all requests")
 	})
 
 	t.Run("Different senders can route to different backends", func(t *testing.T) {
@@ -159,14 +165,23 @@ func TestSenderHashRouting(t *testing.T) {
 		require.Equal(t, 200, resp2.StatusCode)
 		servedBy2 := resp2.Header.Get("X-Served-By")
 
-		totalRequests := 0
-		for _, node := range nodes {
-			totalRequests += node.GetRequestCount()
-		}
-		require.Equal(t, 2, totalRequests)
-
 		require.NotEmpty(t, servedBy1)
 		require.NotEmpty(t, servedBy2)
+		require.NotEqual(t, servedBy1, servedBy2, "different senders should route to different backends")
+
+		totalRequests := 0
+		backendsWithRequests := 0
+		for _, node := range nodes {
+			count := node.GetRequestCount()
+			totalRequests += count
+			// Since we only sent 1 request per sender, each backend should have received exactly 1 request.
+			if count > 0 {
+				backendsWithRequests++
+				require.Equal(t, 1, count, "each backend should receive exactly 1 request")
+			}
+		}
+		require.Equal(t, 2, totalRequests, "total requests should be 2")
+		require.Equal(t, 2, backendsWithRequests, "exactly 2 backends should have received requests")
 	})
 
 	t.Run("Non-sendRawTransaction uses fallback routing", func(t *testing.T) {
@@ -190,38 +205,6 @@ func TestSenderHashRouting(t *testing.T) {
 		rpcRes := &proxyd.RPCRes{}
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(rpcRes))
 		require.False(t, rpcRes.IsError())
-	})
-
-	t.Run("Routing is deterministic with same salt", func(t *testing.T) {
-		nodes, _, svr, shutdown := setupSenderHash(t)
-		defer shutdown()
-
-		var firstServedBy string
-
-		for i := 0; i < 10; i++ {
-			body := makeSenderHashRawTx(senderHashTxHex1)
-			req, _ := http.NewRequest("POST", "https://1.1.1.1:8080", bytes.NewReader(body))
-			req.Header.Set("X-Forwarded-For", "203.0.113.1")
-			rr := httptest.NewRecorder()
-			svr.HandleRPC(rr, req)
-
-			resp := rr.Result()
-			servedBy := resp.Header.Get("X-Served-By")
-			resp.Body.Close()
-
-			if i == 0 {
-				firstServedBy = servedBy
-			} else {
-				require.Equal(t, firstServedBy, servedBy, "Same sender should always route to same backend")
-			}
-		}
-
-		for _, node := range nodes {
-			count := node.GetRequestCount()
-			if count > 0 {
-				require.Equal(t, 10, count)
-			}
-		}
 	})
 
 	t.Run("Returns success when transaction is accepted", func(t *testing.T) {
@@ -287,7 +270,11 @@ func TestSenderHashRoutingFailover(t *testing.T) {
 		resp2 := rr2.Result()
 		defer resp2.Body.Close()
 
-		require.NotNil(t, resp2.Body)
+		secondaryServedBy := resp2.Header.Get("X-Served-By")
+		require.NotEmpty(t, secondaryServedBy)
+		require.NotEqual(t, primaryServedBy, secondaryServedBy, "after primary returns error, request should route to a different backend")
+
+		require.Equal(t, 200, resp2.StatusCode)
 		require.Equal(t, 3, len(bg.Backends))
 	})
 }

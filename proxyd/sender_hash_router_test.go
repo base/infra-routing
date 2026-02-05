@@ -374,7 +374,7 @@ func TestParseRawTx(t *testing.T) {
 			Params: []byte(`"not an array"`),
 		}
 
-		_, err := parseRawTx(req)
+		_, err := ParseRawTx(req)
 		require.Error(t, err)
 	})
 
@@ -384,7 +384,7 @@ func TestParseRawTx(t *testing.T) {
 			Params: []byte(`[]`),
 		}
 
-		_, err := parseRawTx(req)
+		_, err := ParseRawTx(req)
 		require.Error(t, err)
 	})
 
@@ -394,7 +394,7 @@ func TestParseRawTx(t *testing.T) {
 			Params: []byte(`["not-valid-hex"]`),
 		}
 
-		_, err := parseRawTx(req)
+		_, err := ParseRawTx(req)
 		require.Error(t, err)
 	})
 
@@ -410,7 +410,7 @@ func TestParseRawTx(t *testing.T) {
 			Params: []byte(`["` + validTxHex + `"]`),
 		}
 
-		tx, err := parseRawTx(req)
+		tx, err := ParseRawTx(req)
 		require.NoError(t, err)
 		require.NotNil(t, tx)
 	})

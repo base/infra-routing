@@ -1041,7 +1041,7 @@ func (bg *BackendGroup) Forward(ctx context.Context, rpcReqs []*RPCReq, isBatch 
 	// sendRawTransactionConditional, or sendRawTransactionSync request.
 	//
 	// Note: Non-sendRawTransaction requests are not supported by sender hash routing.
-	if bg.routingStrategy == SenderHashRoutingStrategy &&
+	if bg.GetRoutingStrategy() == SenderHashRoutingStrategy &&
 		len(rpcReqs) == 1 &&
 		!isBatch &&
 		IsSendRawTransactionMethod(rpcReqs[0].Method) {
@@ -1316,7 +1316,7 @@ func (bg *BackendGroup) orderedBackendsForSenderHash(ctx context.Context, req *R
 	}
 
 	// Get the transaction information
-	tx, err := parseRawTx(req)
+	tx, err := ParseRawTx(req)
 	if err != nil {
 		log.Warn("failed to parse transaction for sender_hash routing, falling back to default ordering",
 			"backend_group", bg.Name,
