@@ -37,6 +37,7 @@ const (
 	ContextKeyXForwardedFor                         = "x_forwarded_for"
 	ContextKeyOpTxProxyAuth                         = "op_txproxy_auth"
 	ContextKeyInteropValidationStrategy             = "interop_validation_strategy"
+	ContextKeySenderAddr                            = "sender_addr"
 	DefaultOpTxProxyAuthHeader                      = "X-Optimism-Signature"
 	DefaultMaxBatchRPCCallsLimit                    = 100
 	MaxBatchRPCCallsHardLimit                       = 1000
@@ -228,7 +229,7 @@ func NewServer(
 				return http.ErrUseLastResponse
 			},
 		},
-		enableTxHashLogging:     enableTxHashLogging,
+		enableTxHashLogging: enableTxHashLogging,
 	}, nil
 }
 
@@ -596,6 +597,12 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 				responses[i] = NewRPCErrorRes(parsedReq.ID, err)
 				continue
 			}
+
+			senderAddr, senderErr := s.extractSenderAddress(tx)
+			if senderErr == nil && senderAddr != nil {
+				ctx = context.WithValue(ctx, ContextKeySenderAddr, senderAddr)
+			}
+
 			if err := s.rateLimitSender(ctx, tx); err != nil {
 				RecordRPCError(ctx, BackendProxyd, parsedReq.Method, err)
 				responses[i] = NewRPCErrorRes(parsedReq.ID, err)
@@ -934,6 +941,21 @@ func (s *Server) rateLimitSender(ctx context.Context, tx *types.Transaction) err
 	return s.genericRateLimitSender(ctx, tx, s.senderLim)
 }
 
+func (s *Server) extractSenderAddress(tx *types.Transaction) (*common.Address, error) {
+	var signer types.Signer
+	if tx.ChainId().Sign() == 0 {
+		signer = new(types.HomesteadSigner)
+	} else {
+		signer = types.LatestSignerForChainID(tx.ChainId())
+	}
+
+	from, err := types.Sender(signer, tx)
+	if err != nil {
+		return nil, err
+	}
+	return &from, nil
+}
+
 func (s *Server) isAllowedChainId(chainId *big.Int) bool {
 	if len(s.allowedChainIds) == 0 {
 		return true
@@ -1035,6 +1057,14 @@ func GetXForwardedFor(ctx context.Context) string {
 		return ""
 	}
 	return xff
+}
+
+func GetSenderAddrFromContext(ctx context.Context) *common.Address {
+	addr, ok := ctx.Value(ContextKeySenderAddr).(*common.Address)
+	if !ok {
+		return nil
+	}
+	return addr
 }
 
 type recordLenWriter struct {

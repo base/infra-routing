@@ -116,6 +116,25 @@ backends = ["infura"]
 [backend_groups.alchemy]
 backends = ["alchemy"]
 
+# Example: Consistent hash routing for transaction deduplication
+# Routes eth_sendRawTransaction based on sender address hash for deterministic routing.
+# This enables mempool nodes to deduplicate transactions by ensuring the same sender
+# always routes to the same backend(s).
+#
+# [backend_groups.mempool]
+# backends = ["node1", "node2", "node3"]
+# # Use consistent hash routing strategy
+# routing_strategy = "consistent_hash"
+# # Salt for the hash function (required). Should be kept secret to prevent
+# # external actors from predicting routing. Can be rotated on-demand.
+# # Will be read from environment if prefixed with $.
+# consistent_hash_salt = "$CONSISTENT_HASH_SALT"
+# # Number of candidate backends to consider for routing (default: 3)
+# # If primary is unhealthy, will try next candidate in order.
+# consistent_hash_candidates = 3
+# # Timeout in milliseconds for primary candidate before trying next (default: 50)
+# consistent_hash_timeout_ms = 50
+
 # If the authentication group below is in the config,
 # proxyd will only accept authenticated requests.
 [authentication]

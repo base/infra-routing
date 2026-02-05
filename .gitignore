@@ -7,3 +7,6 @@ bin/
 
 # Local AWS config
 .aws 
+
+# Opencode 
+.sisyphus

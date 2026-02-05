@@ -1,0 +1,27 @@
+[server]
+rpc_port = 8545
+
+[backend]
+response_timeout_seconds = 1
+
+[backends]
+[backends.node1]
+rpc_url = "$NODE1_BACKEND_RPC_URL"
+
+[backends.node2]
+rpc_url = "$NODE2_BACKEND_RPC_URL"
+
+[backends.node3]
+rpc_url = "$NODE3_BACKEND_RPC_URL"
+
+[backend_groups]
+[backend_groups.main]
+backends = ["node1", "node2", "node3"]
+routing_strategy = "consistent_hash"
+consistent_hash_salt = "$CONSISTENT_HASH_SALT"
+consistent_hash_candidates = 3
+consistent_hash_timeout_ms = 50
+
+[rpc_method_mappings]
+eth_sendRawTransaction = "main"
+eth_chainId = "main"

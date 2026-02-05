@@ -298,6 +298,31 @@ func Start(config *Config) (*Server, func(), error) {
 				)
 		}
 
+		var consistentHashRouter *ConsistentHashRouter
+		if bg.RoutingStrategy == ConsistentHashRoutingStrategy {
+			salt, err := ReadFromEnvOrConfig(bg.ConsistentHashSalt)
+			if err != nil {
+				return nil, nil, fmt.Errorf("backend_group %s: failed to read consistent_hash_salt: %w", bgName, err)
+			}
+			if salt == "" {
+				return nil, nil, fmt.Errorf("backend_group %s: consistent_hash routing requires consistent_hash_salt", bgName)
+			}
+
+			consistentHashRouter = NewConsistentHashRouter(
+				backends,
+				salt,
+				bg.ConsistentHashCandidates,
+				bg.ConsistentHashTimeoutMs,
+			)
+
+			log.Info("initialized consistent hash router",
+				"backend_group", bgName,
+				"num_backends", len(backends),
+				"num_candidates", bg.ConsistentHashCandidates,
+				"timeout_ms", bg.ConsistentHashTimeoutMs,
+			)
+		}
+
 		backendGroups[bgName] = &BackendGroup{
 			Name:                   bgName,
 			Backends:               backends,
@@ -305,6 +330,7 @@ func Start(config *Config) (*Server, func(), error) {
 			FallbackBackends:       fallbackBackends,
 			routingStrategy:        bg.RoutingStrategy,
 			multicallRPCErrorCheck: bg.MulticallRPCErrorCheck,
+			consistentHashRouter:   consistentHashRouter,
 		}
 	}
 

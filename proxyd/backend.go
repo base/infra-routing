@@ -927,6 +927,7 @@ type BackendGroup struct {
 	FallbackBackends       map[string]bool
 	routingStrategy        RoutingStrategy
 	multicallRPCErrorCheck bool
+	consistentHashRouter   *ConsistentHashRouter
 }
 
 func (bg *BackendGroup) GetRoutingStrategy() RoutingStrategy {
@@ -954,13 +955,21 @@ func (bg *BackendGroup) Primaries() []*Backend {
 	return primaries
 }
 
-// NOTE: BackendGroup Forward contains the log for balancing with consensus aware
 func (bg *BackendGroup) Forward(ctx context.Context, rpcReqs []*RPCReq, isBatch bool) ([]*RPCRes, string, error) {
 	if len(rpcReqs) == 0 {
 		return nil, "", nil
 	}
 
-	backends := bg.orderedBackendsForRequest()
+	var backends []*Backend
+	if bg.consistentHashRouter != nil && len(rpcReqs) == 1 && isConsistentHashMethod(rpcReqs[0].Method) {
+		if senderAddr := GetSenderAddrFromContext(ctx); senderAddr != nil {
+			backends = bg.orderedBackendsForConsistentHash(*senderAddr)
+		} else {
+			backends = bg.orderedBackendsForRequest()
+		}
+	} else {
+		backends = bg.orderedBackendsForRequest()
+	}
 
 	overriddenResponses := make([]*indexedReqRes, 0)
 	rewrittenReqs := make([]*RPCReq, 0, len(rpcReqs))
@@ -1014,6 +1023,12 @@ func isValidMulticallTx(rpcReqs []*RPCReq) bool {
 		}
 	}
 	return false
+}
+
+func isConsistentHashMethod(method string) bool {
+	return method == "eth_sendRawTransaction" ||
+		method == "eth_sendRawTransactionConditional" ||
+		method == "eth_sendRawTransactionSync"
 }
 
 // Using special struct since servedBy may not be populated if error occurs
@@ -1210,6 +1225,36 @@ func (bg *BackendGroup) orderedBackendsForRequest() []*Backend {
 		}
 		return append(healthy, unhealthy...)
 	}
+}
+
+func (bg *BackendGroup) orderedBackendsForConsistentHash(senderAddr common.Address) []*Backend {
+	if bg.consistentHashRouter == nil {
+		return bg.orderedBackendsForRequest()
+	}
+
+	candidates, err := bg.consistentHashRouter.RouteToBackends(senderAddr)
+	if err != nil {
+		log.Warn("consistent hash routing failed, falling back to default ordering",
+			"err", err,
+			"sender", senderAddr.Hex())
+		return bg.orderedBackendsForRequest()
+	}
+
+	healthy := make([]*Backend, 0, len(candidates))
+	degraded := make([]*Backend, 0, len(candidates))
+
+	for _, be := range candidates {
+		if !be.IsHealthy() {
+			continue
+		}
+		if be.IsDegraded() {
+			degraded = append(degraded, be)
+			continue
+		}
+		healthy = append(healthy, be)
+	}
+
+	return append(healthy, degraded...)
 }
 
 func (bg *BackendGroup) loadBalancedConsensusGroup() []*Backend {

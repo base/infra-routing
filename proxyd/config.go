@@ -153,6 +153,17 @@ func (b *BackendGroupConfig) ValidateRoutingStrategy(bgName string) bool {
 		return true
 	case FallbackRoutingStrategy:
 		return true
+	case ConsistentHashRoutingStrategy:
+		if b.ConsistentHashSalt == "" {
+			log.Crit("consistent_hash routing requires consistent_hash_salt to be set", "name", bgName)
+		}
+		if b.ConsistentHashCandidates <= 0 {
+			b.ConsistentHashCandidates = 3
+		}
+		if b.ConsistentHashTimeoutMs <= 0 {
+			b.ConsistentHashTimeoutMs = 50
+		}
+		return true
 	case "":
 		log.Info("Empty routing strategy provided for backend_group, using fallback strategy ", "name", bgName)
 		b.RoutingStrategy = FallbackRoutingStrategy
@@ -166,6 +177,7 @@ const (
 	ConsensusAwareRoutingStrategy RoutingStrategy = "consensus_aware"
 	MulticallRoutingStrategy      RoutingStrategy = "multicall"
 	FallbackRoutingStrategy       RoutingStrategy = "fallback"
+	ConsistentHashRoutingStrategy RoutingStrategy = "consistent_hash"
 )
 
 type BackendGroupConfig struct {
@@ -176,6 +188,10 @@ type BackendGroupConfig struct {
 	RoutingStrategy RoutingStrategy `toml:"routing_strategy"`
 
 	MulticallRPCErrorCheck bool `toml:"multicall_rpc_error_check"`
+
+	ConsistentHashSalt       string `toml:"consistent_hash_salt"`
+	ConsistentHashCandidates int    `toml:"consistent_hash_candidates"`
+	ConsistentHashTimeoutMs  int    `toml:"consistent_hash_timeout_ms"`
 
 	/*
 		Deprecated: Use routing_strategy config to create a consensus_aware proxyd instance

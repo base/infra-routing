@@ -2,6 +2,7 @@ package proxyd
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -137,6 +138,7 @@ func TestClientDisconnectionFlow499(t *testing.T) {
 		InteropValidationConfig{},              // interopValidatingConfig
 		NewFirstSupervisorStrategy([]string{}), // interopStrategy
 		false,                                  // enableTxHashLogging
+		"",                                     // ingressRpc
 	)
 	require.NoError(t, err)
 
@@ -172,17 +174,15 @@ func TestIngressForwarding(t *testing.T) {
 	backendRequests := make(chan []byte, 10)
 	ingressRequests := make(chan []byte, 10)
 
-	// Mock backend server
 	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		backendRequests <- body
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":"0x1234","id":1}`))
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","result":"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef","id":1}`))
 	}))
 	defer backendServer.Close()
 
-	// Mock ingress server
 	ingressServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		ingressRequests <- body
@@ -192,46 +192,64 @@ func TestIngressForwarding(t *testing.T) {
 	}))
 	defer ingressServer.Close()
 
-	// Create backend with ingress RPC configured
-	backend := NewBackend(
-		"test-backend",
-		backendServer.URL,
-		"",
-		semaphore.NewWeighted(10),
-		WithIngressRPC(ingressServer.URL),
-	)
-
-	// Create a test RPC request
-	rpcReq := &RPCReq{
-		JSONRPC: "2.0",
-		Method:  "eth_blockNumber",
-		Params:  []byte(`[]`),
-		ID:      []byte(`1`),
+	backend := NewBackend("test-backend", backendServer.URL, "", semaphore.NewWeighted(10))
+	backendGroup := &BackendGroup{
+		Name:     "test-group",
+		Backends: []*Backend{backend},
 	}
 
-	// Forward the request
-	ctx := context.Background()
-	res, err := backend.Forward(ctx, []*RPCReq{rpcReq}, false)
+	rpcMethodMappings := map[string]string{
+		"eth_sendRawTransaction": "test-group",
+	}
 
-	// Verify the backend request was successful
+	proxydServer, err := NewServer(
+		map[string]*BackendGroup{"test-group": backendGroup},
+		backendGroup,
+		NewStringSetFromStrings([]string{}),
+		rpcMethodMappings,
+		1024*1024,
+		map[string]string{},
+		false,
+		5*time.Second,
+		10,
+		false,
+		&NoopRPCCache{},
+		RateLimitConfig{},
+		SenderRateLimitConfig{},
+		SenderRateLimitConfig{},
+		false,
+		0,
+		100,
+		func(dur time.Duration, max int, prefix string) FrontendRateLimiter {
+			return NoopFrontendRateLimiter
+		},
+		InteropValidationConfig{},
+		NewFirstSupervisorStrategy([]string{}),
+		false,
+		ingressServer.URL,
+	)
 	require.NoError(t, err)
-	require.Len(t, res, 1)
-	require.False(t, res[0].IsError())
 
-	// Verify both backend and ingress received the request
+	signedTx := "0xf86c0a8502540be400825208944bbeeb066ed09b7aed07bf39eee0460dfa261520880de0b6b3a7640000801ca0f3ae52c1ef3300f44df0bcfd1341c232ed6134672b16e35699ae3f5fe2493379a023d23d2955a239dd6f61c4e8b2678d174356ff424eac53da53e17571bf9101b6"
+	reqBody := fmt.Sprintf(`{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["%s"],"id":1}`, signedTx)
+
+	httpReq := httptest.NewRequest("POST", "/", strings.NewReader(reqBody))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Forwarded-For", "127.0.0.1")
+	rr := httptest.NewRecorder()
+
+	proxydServer.HandleRPC(rr, httpReq)
+
 	select {
 	case backendBody := <-backendRequests:
-		require.Contains(t, string(backendBody), "eth_blockNumber")
-		require.Contains(t, string(backendBody), `"id":1`)
+		require.Contains(t, string(backendBody), "eth_sendRawTransaction")
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Backend did not receive request")
 	}
 
-	// Give a bit more time for the async ingress request to complete
 	select {
 	case ingressBody := <-ingressRequests:
-		require.Contains(t, string(ingressBody), "eth_blockNumber")
-		require.Contains(t, string(ingressBody), `"id":1`)
+		require.Contains(t, string(ingressBody), "eth_sendRawTransaction")
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Ingress did not receive request")
 	}
