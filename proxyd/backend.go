@@ -481,12 +481,6 @@ func WithIntermittentNetworkErrorSlidingWindow(sw *sw.AvgSlidingWindow) BackendO
 	}
 }
 
-func WithIngressRPC(ingressRPC string) BackendOpt {
-	return func(b *Backend) {
-		b.ingressRPC = ingressRPC
-	}
-}
-
 func WithProbe(probeURL string, probeFailureThreshold int, probeSuccessThreshold int, probePeriodSeconds int, probeTimeoutSeconds int) BackendOpt {
 	return func(b *Backend) {
 		b.probeURL = probeURL
