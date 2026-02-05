@@ -311,6 +311,7 @@ type Backend struct {
 	maxWSConns           int
 	outOfServiceInterval time.Duration
 	stripTrailingXFF     bool
+	ingressRPC           string
 	proxydIP             string
 
 	skipIsSyncingCheck bool
