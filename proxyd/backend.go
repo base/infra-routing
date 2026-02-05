@@ -481,6 +481,12 @@ func WithIntermittentNetworkErrorSlidingWindow(sw *sw.AvgSlidingWindow) BackendO
 	}
 }
 
+func WithIngressRPC(ingressRPC string) BackendOpt {
+	return func(b *Backend) {
+		b.ingressRPC = ingressRPC
+	}
+}
+
 func WithProbe(probeURL string, probeFailureThreshold int, probeSuccessThreshold int, probePeriodSeconds int, probeTimeoutSeconds int) BackendOpt {
 	return func(b *Backend) {
 		b.probeURL = probeURL
@@ -999,6 +1005,7 @@ type BackendGroup struct {
 	Consensus              *ConsensusPoller
 	FallbackBackends       map[string]bool
 	routingStrategy        RoutingStrategy
+	senderHashRouter       *SenderHashRouter
 	multicallRPCErrorCheck bool
 	maxBlockRange          uint64
 }
@@ -1034,7 +1041,16 @@ func (bg *BackendGroup) Forward(ctx context.Context, rpcReqs []*RPCReq, isBatch 
 		return nil, "", nil
 	}
 
-	backends := bg.orderedBackendsForRequest()
+	var backends []*Backend
+
+	if bg.routingStrategy == SenderHashRoutingStrategy &&
+		len(rpcReqs) == 1 &&
+		!isBatch &&
+		IsSendRawTransactionMethod(rpcReqs[0].Method) {
+		backends = bg.orderedBackendsForSenderHash(ctx, rpcReqs[0])
+	} else {
+		backends = bg.orderedBackendsForRequest()
+	}
 
 	overriddenResponses := make([]*indexedReqRes, 0)
 	rewrittenReqs := make([]*RPCReq, 0, len(rpcReqs))
@@ -1286,6 +1302,55 @@ func (bg *BackendGroup) orderedBackendsForRequest() []*Backend {
 		}
 		return append(healthy, unhealthy...)
 	}
+}
+
+func (bg *BackendGroup) orderedBackendsForSenderHash(ctx context.Context, req *RPCReq) []*Backend {
+	if bg.senderHashRouter == nil {
+		log.Warn("sender_hash routing strategy configured but no router initialized, falling back to default ordering",
+			"backend_group", bg.Name,
+			"req_id", GetReqID(ctx),
+		)
+		return bg.orderedBackendsForRequest()
+	}
+
+	tx, err := parseRawTx(req)
+	if err != nil {
+		log.Warn("failed to parse transaction for sender_hash routing, falling back to default ordering",
+			"backend_group", bg.Name,
+			"req_id", GetReqID(ctx),
+			"err", err,
+		)
+		return bg.orderedBackendsForRequest()
+	}
+
+	senderAddr, err := ExtractSenderFromTx(ctx, tx)
+	if err != nil {
+		log.Warn("failed to extract sender for sender_hash routing, falling back to default ordering",
+			"backend_group", bg.Name,
+			"req_id", GetReqID(ctx),
+			"err", err,
+		)
+		return bg.orderedBackendsForRequest()
+	}
+
+	backends := bg.senderHashRouter.OrderedBackendsForSender(senderAddr, bg.Backends)
+	if len(backends) == 0 {
+		log.Warn("sender_hash routing returned no backends, falling back to default ordering",
+			"backend_group", bg.Name,
+			"req_id", GetReqID(ctx),
+			"sender", senderAddr.Hex(),
+		)
+		return bg.orderedBackendsForRequest()
+	}
+
+	log.Debug("using sender_hash routing",
+		"backend_group", bg.Name,
+		"req_id", GetReqID(ctx),
+		"sender", senderAddr.Hex(),
+		"primary_backend", backends[0].Name,
+	)
+
+	return backends
 }
 
 func (bg *BackendGroup) loadBalancedConsensusGroup() []*Backend {

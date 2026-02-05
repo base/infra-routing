@@ -116,6 +116,13 @@ backends = ["infura"]
 [backend_groups.alchemy]
 backends = ["alchemy"]
 
+# Example: Sender hash routing for mempool nodes
+# Routes eth_sendRawTransaction requests to consistent backends based on sender address
+# [backend_groups.mempool]
+# backends = ["mempool1", "mempool2", "mempool3"]
+# routing_strategy = "sender_hash"
+# sender_hash_salt = "$SENDER_HASH_SALT"
+
 # If the authentication group below is in the config,
 # proxyd will only accept authenticated requests.
 [authentication]

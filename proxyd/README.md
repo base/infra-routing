@@ -141,6 +141,37 @@ See `metrics.go` for a list of all available metrics.
 
 The metrics port is configurable via the `metrics.port` and `metrics.host` keys in the config.
 
+## Sender Hash Routing
+
+For `eth_sendRawTransaction` requests, proxyd supports consistent hash-based routing using the transaction sender's address. This ensures transactions from the same sender always route to the same mempool node, improving transaction deduplication and ordering.
+
+To enable sender hash routing:
+
+```toml
+[backend_groups.mempool]
+backends = ["node1", "node2", "node3"]
+routing_strategy = "sender_hash"
+sender_hash_salt = "$SENDER_HASH_SALT"
+```
+
+Configuration:
+* `routing_strategy = "sender_hash"` - Enables sender-based consistent hashing
+* `sender_hash_salt` - A secret salt value used in the hash computation. Supports environment variable syntax (e.g., `$SENDER_HASH_SALT`)
+
+The routing algorithm uses rendezvous (HRW) hashing with SHA256:
+* Computes `SHA256(sender_address + salt + backend_name)` for each backend
+* Routes to the backend with the highest score
+* Unhealthy backends are automatically excluded
+* If the primary backend fails, the request is retried on the next-highest-scoring backend
+
+Security considerations:
+* The salt should be kept secret to prevent prediction attacks
+* Salt rotation should be infrequent to avoid disrupting sender-to-node affinity
+* Use environment variables (e.g., `$SENDER_HASH_SALT`) rather than hardcoding the salt
+
+Non-sendRawTransaction methods use the default fallback routing strategy.
+
+
 ## Adding Backend SSL Certificates in Docker
 
 The Docker image runs on Alpine Linux. If you get SSL errors when connecting to a backend within Docker, you may need to add additional certificates to Alpine's certificate store. To do this, bind mount the certificate bundle into a file in `/usr/local/share/ca-certificates`. The `entrypoint.sh` script will then update the store with whatever is in the `ca-certificates` directory prior to starting `proxyd`.

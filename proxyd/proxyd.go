@@ -368,12 +368,26 @@ func Start(config *Config) (*Server, func(), error) {
 			maxBlockRange = bg.MaxBlockRange
 		}
 
+		var senderHashRouter *SenderHashRouter
+		if bg.RoutingStrategy == SenderHashRoutingStrategy {
+			salt, err := ReadFromEnvOrConfig(bg.SenderHashSalt)
+			if err != nil {
+				log.Warn("failed to read sender_hash_salt, routing will fall back to default", "backend_group", bgName, "err", err)
+			} else if salt == "" {
+				log.Warn("sender_hash_salt is empty, routing will fall back to default", "backend_group", bgName)
+			} else {
+				senderHashRouter = NewSenderHashRouter(salt)
+				log.Info("initialized sender_hash routing", "backend_group", bgName)
+			}
+		}
+
 		backendGroups[bgName] = &BackendGroup{
 			Name:                   bgName,
 			Backends:               backends,
 			WeightedRouting:        bg.WeightedRouting,
 			FallbackBackends:       fallbackBackends,
 			routingStrategy:        bg.RoutingStrategy,
+			senderHashRouter:       senderHashRouter,
 			multicallRPCErrorCheck: bg.MulticallRPCErrorCheck,
 			maxBlockRange:          maxBlockRange,
 		}

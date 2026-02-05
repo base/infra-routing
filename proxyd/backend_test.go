@@ -141,6 +141,7 @@ func TestClientDisconnectionFlow499(t *testing.T) {
 		nil,                                    // limExemptKeys
 		TxValidationMiddlewareConfig{},         // txValidationConfig
 		10*time.Second,                         // gracefulShutdownDuration
+		"",                                     // ingressRpc
 	)
 	require.NoError(t, err)
 
@@ -216,7 +217,6 @@ func TestIngressForwarding(t *testing.T) {
 	backendRequests := make(chan []byte, 10)
 	ingressRequests := make(chan []byte, 10)
 
-	// Mock backend server
 	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		backendRequests <- body
@@ -226,7 +226,6 @@ func TestIngressForwarding(t *testing.T) {
 	}))
 	defer backendServer.Close()
 
-	// Mock ingress server
 	ingressServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		ingressRequests <- body
@@ -236,7 +235,6 @@ func TestIngressForwarding(t *testing.T) {
 	}))
 	defer ingressServer.Close()
 
-	// Create backend with ingress RPC configured
 	backend := NewBackend(
 		"test-backend",
 		backendServer.URL,
@@ -245,7 +243,6 @@ func TestIngressForwarding(t *testing.T) {
 		WithIngressRPC(ingressServer.URL),
 	)
 
-	// Create a test RPC request
 	rpcReq := &RPCReq{
 		JSONRPC: "2.0",
 		Method:  "eth_blockNumber",
@@ -253,16 +250,13 @@ func TestIngressForwarding(t *testing.T) {
 		ID:      []byte(`1`),
 	}
 
-	// Forward the request
 	ctx := context.Background()
 	res, err := backend.Forward(ctx, []*RPCReq{rpcReq}, false)
 
-	// Verify the backend request was successful
 	require.NoError(t, err)
 	require.Len(t, res, 1)
 	require.False(t, res[0].IsError())
 
-	// Verify both backend and ingress received the request
 	select {
 	case backendBody := <-backendRequests:
 		require.Contains(t, string(backendBody), "eth_blockNumber")
@@ -271,7 +265,6 @@ func TestIngressForwarding(t *testing.T) {
 		t.Fatal("Backend did not receive request")
 	}
 
-	// Give a bit more time for the async ingress request to complete
 	select {
 	case ingressBody := <-ingressRequests:
 		require.Contains(t, string(ingressBody), "eth_blockNumber")

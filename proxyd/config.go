@@ -164,6 +164,11 @@ func (b *BackendGroupConfig) ValidateRoutingStrategy(bgName string) bool {
 		return true
 	case FallbackRoutingStrategy:
 		return true
+	case SenderHashRoutingStrategy:
+		if b.SenderHashSalt == "" {
+			log.Warn("sender_hash routing strategy requires sender_hash_salt to be set", "name", bgName)
+		}
+		return true
 	case "":
 		log.Info("Empty routing strategy provided for backend_group, using fallback strategy ", "name", bgName)
 		b.RoutingStrategy = FallbackRoutingStrategy
@@ -177,6 +182,7 @@ const (
 	ConsensusAwareRoutingStrategy RoutingStrategy = "consensus_aware"
 	MulticallRoutingStrategy      RoutingStrategy = "multicall"
 	FallbackRoutingStrategy       RoutingStrategy = "fallback"
+	SenderHashRoutingStrategy     RoutingStrategy = "sender_hash"
 )
 
 type BackendGroupConfig struct {
@@ -185,6 +191,12 @@ type BackendGroupConfig struct {
 	WeightedRouting bool `toml:"weighted_routing"`
 
 	RoutingStrategy RoutingStrategy `toml:"routing_strategy"`
+
+	// SenderHashSalt is a secret salt used for consistent hash-based routing.
+	// When routing_strategy is "sender_hash", this salt is combined with the
+	// sender address to determine which backend receives the transaction.
+	// Use an environment variable (e.g., "$SENDER_HASH_SALT") to keep it secret.
+	SenderHashSalt string `toml:"sender_hash_salt"`
 
 	MulticallRPCErrorCheck bool `toml:"multicall_rpc_error_check"`
 
