@@ -55,6 +55,40 @@ type RedisConfig struct {
 	ReadURL          string `toml:"read_url"`
 	FallbackToMemory bool   `toml:"fallback_to_memory"`
 	RedisCluster     bool   `toml:"redis_cluster"`
+
+	// Connection pool settings for performance tuning.
+	// PoolSize is the maximum number of socket connections.
+	// Default is 10 connections per every available CPU as reported by runtime.GOMAXPROCS.
+	PoolSize int `toml:"pool_size"`
+	// MinIdleConns is the minimum number of idle connections to keep open.
+	// This helps reduce latency on sudden traffic spikes by having warm connections ready.
+	MinIdleConns int `toml:"min_idle_conns"`
+	// MaxIdleConns is the maximum number of idle connections to keep open.
+	// Setting this lower than PoolSize helps release unused connections.
+	// Default is 0 (no limit, same as PoolSize).
+	MaxIdleConns int `toml:"max_idle_conns"`
+	// ReadTimeoutMS is the timeout in milliseconds for reading a single command reply.
+	// Default is 3000ms (3 seconds).
+	ReadTimeoutMS int `toml:"read_timeout_ms"`
+	// WriteTimeoutMS is the timeout in milliseconds for writing a single command.
+	// Default is 3000ms (3 seconds).
+	WriteTimeoutMS int `toml:"write_timeout_ms"`
+	// DialTimeoutMS is the timeout in milliseconds for establishing new connections.
+	// Default is 5000ms (5 seconds).
+	DialTimeoutMS int `toml:"dial_timeout_ms"`
+	// PoolTimeoutMS is the amount of time in milliseconds client waits for a connection
+	// if all connections are busy before returning an error.
+	// Default is ReadTimeout + 1 second.
+	PoolTimeoutMS int `toml:"pool_timeout_ms"`
+	// MaxRetries is the maximum number of retries before giving up.
+	// Default is 3 retries; -1 disables retries.
+	MaxRetries int `toml:"max_retries"`
+	// MinRetryBackoffMS is the minimum backoff in milliseconds between each retry.
+	// Default is 8ms; -1 disables backoff.
+	MinRetryBackoffMS int `toml:"min_retry_backoff_ms"`
+	// MaxRetryBackoffMS is the maximum backoff in milliseconds between each retry.
+	// Default is 512ms; -1 disables backoff.
+	MaxRetryBackoffMS int `toml:"max_retry_backoff_ms"`
 }
 
 type MetricsConfig struct {
