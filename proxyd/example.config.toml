@@ -39,25 +39,25 @@ url = "redis://localhost:6379"
 
 # Connection pool tuning (recommended for high-throughput deployments).
 # Maximum number of socket connections. Default: 100
-# pool_size = 100
+# redis_pool_size = 100
 # Minimum idle connections to keep warm. Default: 20
-# min_idle_conns = 20
+# redis_min_idle_conns = 20
 # Maximum idle connections. Default: 0 (no limit, same as pool_size)
-# max_idle_conns = 0
+# redis_max_idle_conns = 0
 # Read timeout in milliseconds. Default: 3000
-# read_timeout_ms = 3000
+# redis_read_timeout_ms = 3000
 # Write timeout in milliseconds. Default: 3000
-# write_timeout_ms = 3000
+# redis_write_timeout_ms = 3000
 # Dial timeout in milliseconds for new connections. Default: 5000
-# dial_timeout_ms = 5000
+# redis_dial_timeout_ms = 5000
 # Pool timeout in milliseconds (time to wait for available connection). Default: read_timeout + 1s
-# pool_timeout_ms = 4000
+# redis_pool_timeout_ms = 4000
 # Maximum retry attempts. Default: 3, set to -1 to disable retries.
-# max_retries = 3
+# redis_max_retries = 3
 # Minimum retry backoff in milliseconds. Default: 8, set to -1 to disable.
-# min_retry_backoff_ms = 8
+# redis_min_retry_backoff_ms = 8
 # Maximum retry backoff in milliseconds. Default: 512, set to -1 to disable.
-# max_retry_backoff_ms = 512
+# redis_max_retry_backoff_ms = 512
 
 [metrics]
 # Whether or not to enable Prometheus metrics.
