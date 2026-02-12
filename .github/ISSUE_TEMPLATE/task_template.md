@@ -1,6 +1,6 @@
 # Overview
 
-What is the task? Remember that a task MUST take longer than 3 full work days to complete. Tasks are not intended to track granular issues, but lager tasks that need to be completed for a project to move forward. 
+What is the task? Remember that a task MUST take longer than 3 full work days to complete. Tasks are not intended to track granular issues, but larger tasks that need to be completed for a project to move forward. 
 
 ## Timeline
 
