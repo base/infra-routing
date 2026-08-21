@@ -6,4 +6,7 @@ coverage.out
 bin/
 
 # Local AWS config
-.aws 
+.aws
+
+# Local signer overrides
+.envrc.local
