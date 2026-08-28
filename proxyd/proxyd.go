@@ -139,6 +139,10 @@ func Start(config *Config) (*Server, func(), error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		txIngressEndpoint, err := ReadFromEnvOrConfig(cfg.TxIngressEndpoint)
+		if err != nil {
+			return nil, nil, err
+		}
 		if rpcURL == "" {
 			return nil, nil, fmt.Errorf("must define an RPC URL for backend %s", name)
 		}
@@ -223,6 +227,9 @@ func Start(config *Config) (*Server, func(), error) {
 		if len(cfg.AllowedStatusCodes) > 0 {
 			opts = append(opts, WithAllowedStatusCodes(cfg.AllowedStatusCodes))
 		}
+		if txIngressEndpoint != "" {
+			opts = append(opts, WithTransactionIngress(txIngressEndpoint))
+		}
 
 		receiptsTarget, err := ReadFromEnvOrConfig(cfg.ConsensusReceiptsTarget)
 		if err != nil {
@@ -242,6 +249,7 @@ func Start(config *Config) (*Server, func(), error) {
 			"backend_names", backendNames,
 			"rpc_url", rpcURL,
 			"ws_url", wsURL,
+			"tx_ingress_endpoint", txIngressEndpoint,
 			"probe_url", back.probeURL)
 
 		if back.probeSpec != nil {
@@ -650,6 +658,9 @@ func Start(config *Config) (*Server, func(), error) {
 		for _, backEnd := range backendsByName {
 			if backEnd.ProbeWorker != nil {
 				backEnd.ProbeWorker.Stop()
+			}
+			if err := backEnd.Close(); err != nil {
+				log.Warn("error closing backend", "name", backEnd.Name, "err", err)
 			}
 		}
 		log.Info("shutting down proxyd")

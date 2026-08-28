@@ -19,10 +19,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	txingressv1 "github.com/ethereum-optimism/infra/proxyd/base/tx_ingress/v1"
 	sw "github.com/ethereum-optimism/infra/proxyd/pkg/avg-sliding-window"
 	supervisorBackend "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend"
 	supervisorTypes "github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/gorilla/websocket"
@@ -334,6 +336,8 @@ type Backend struct {
 
 	weight             int
 	allowedStatusCodes []int
+
+	transactionIngress *TransactionIngressClient
 }
 
 type BackendOpt func(b *Backend)
@@ -471,6 +475,12 @@ func WithMaxErrorRateThreshold(maxErrorRateThreshold float64) BackendOpt {
 func WithConsensusReceiptTarget(receiptsTarget string) BackendOpt {
 	return func(b *Backend) {
 		b.receiptsTarget = receiptsTarget
+	}
+}
+
+func WithTransactionIngress(endpoint string) BackendOpt {
+	return func(b *Backend) {
+		b.transactionIngress = NewTransactionIngressClient(endpoint)
 	}
 }
 
@@ -725,6 +735,9 @@ func (b *Backend) ForwardRPC(ctx context.Context, res *RPCRes, id string, method
 func (b *Backend) doForward(ctx context.Context, rpcReqs []*RPCReq, isBatch bool) ([]*RPCRes, error) {
 	// we are concerned about network error rates, so we record 1 request independently of how many are in the batch
 	b.networkRequestsSlidingWindow.Incr()
+	if b.transactionIngress != nil && onlyRawTransactionRequests(rpcReqs) {
+		return b.forwardRawTransactions(ctx, rpcReqs)
+	}
 
 	translatedReqs := make(map[string]*RPCReq, len(rpcReqs))
 	// translate consensus_getReceipts to receipts target
@@ -920,6 +933,117 @@ func (b *Backend) doForward(ctx context.Context, rpcReqs []*RPCReq, isBatch bool
 	sortBatchRPCResponse(rpcReqs, rpcRes)
 
 	return rpcRes, nil
+}
+
+func onlyRawTransactionRequests(rpcReqs []*RPCReq) bool {
+	if len(rpcReqs) == 0 {
+		return false
+	}
+	for _, req := range rpcReqs {
+		if req.Method != "eth_sendRawTransaction" {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Backend) forwardRawTransactions(ctx context.Context, rpcReqs []*RPCReq) ([]*RPCRes, error) {
+	if b.client.sem != nil {
+		if err := b.client.sem.Acquire(ctx, 1); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return nil, ErrContextCanceled
+			}
+			return nil, wrapErr(err, ErrTooManyRequests.Message)
+		}
+		defer b.client.sem.Release(1)
+	}
+
+	start := time.Now()
+	responses := make([]*RPCRes, len(rpcReqs))
+	var wg sync.WaitGroup
+	var firstError error
+	var errorMu sync.Mutex
+	for i, rpcReq := range rpcReqs {
+		var params []hexutil.Bytes
+		if err := json.Unmarshal(rpcReq.Params, &params); err != nil || len(params) != 1 {
+			responses[i] = NewRPCErrorRes(rpcReq.ID, ErrInvalidParams("missing value for required argument 0"))
+			continue
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			response, err := b.transactionIngress.Submit(ctx, params[0])
+			if err != nil {
+				errorMu.Lock()
+				if firstError == nil {
+					firstError = err
+				}
+				errorMu.Unlock()
+				return
+			}
+			responses[i], err = transactionIngressRPCResponse(rpcReq.ID, response)
+			if err != nil {
+				errorMu.Lock()
+				if firstError == nil {
+					firstError = err
+				}
+				errorMu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if firstError != nil {
+		if errors.Is(firstError, context.Canceled) {
+			return nil, ErrContextCanceled
+		}
+		b.intermittentErrorsSlidingWindow.Incr()
+		RecordBackendNetworkErrorRateSlidingWindow(b, b.ErrorRate())
+		return nil, wrapErr(firstError, "transaction ingress request failed")
+	}
+
+	b.latencySlidingWindow.Add(float64(time.Since(start)))
+	RecordBackendNetworkLatencyAverageSlidingWindow(b, time.Duration(b.latencySlidingWindow.Avg()))
+	RecordBackendNetworkErrorRateSlidingWindow(b, b.ErrorRate())
+	return responses, nil
+}
+
+func transactionIngressRPCResponse(id json.RawMessage, response *txingressv1.SubmitResponse) (*RPCRes, error) {
+	switch outcome := response.GetOutcome().(type) {
+	case *txingressv1.SubmitResponse_TransactionHash:
+		if len(outcome.TransactionHash) != common.HashLength {
+			return nil, ErrBackendBadResponse
+		}
+		return NewRPCRes(id, hexutil.Encode(outcome.TransactionHash)), nil
+	case *txingressv1.SubmitResponse_Error:
+		if outcome.Error == nil || (len(outcome.Error.JsonData) > 0 && !json.Valid(outcome.Error.JsonData)) {
+			return nil, ErrBackendBadResponse
+		}
+		return NewRPCErrorRes(id, &RPCErr{
+			Code:    int(outcome.Error.GetCode()),
+			Message: outcome.Error.GetMessage(),
+			Data:    json.RawMessage(outcome.Error.GetJsonData()),
+		}), nil
+	default:
+		return nil, ErrBackendBadResponse
+	}
+}
+
+func (b *Backend) Close() error {
+	if b.transactionIngress == nil {
+		return nil
+	}
+	return b.transactionIngress.Close()
+}
+
+func (bg *BackendGroup) UsesTransactionIngress() bool {
+	for _, backend := range bg.Backends {
+		if backend.transactionIngress != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // IsHealthy checks if the backend is able to serve traffic, based on dynamic parameters

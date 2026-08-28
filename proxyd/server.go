@@ -561,8 +561,9 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 	// as the backend MAY return Responses out of order.
 	// NOTE: Duplicate request ids induces 1-sized JSON-RPC batches
 	type batchGroup struct {
-		groupID      int
-		backendGroup string
+		groupID            int
+		backendGroup       string
+		transactionIngress bool
 	}
 
 	responses := make([]*RPCRes, len(reqs))
@@ -678,7 +679,11 @@ func (s *Server) handleBatchRPC(ctx context.Context, reqs []json.RawMessage, isL
 		// If this is a duplicate Request ID, move the Request to a new batchGroup
 		ids[id]++
 		batchGroupID := ids[id]
-		batchGroup := batchGroup{groupID: batchGroupID, backendGroup: group}
+		batchGroup := batchGroup{
+			groupID:            batchGroupID,
+			backendGroup:       group,
+			transactionIngress: parsedReq.Method == "eth_sendRawTransaction" && s.BackendGroups[group].UsesTransactionIngress(),
+		}
 		batches[batchGroup] = append(batches[batchGroup], batchElem{parsedReq, i})
 	}
 

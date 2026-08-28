@@ -59,6 +59,10 @@ max_error_rate_threshold = 0.3
 # The URL to contact the backend at. Will be read from the environment
 # if an environment variable prefixed with $ is provided.
 rpc_url = ""
+# Optional plaintext gRPC endpoint for forwarding eth_sendRawTransaction over
+# one persistent bidirectional stream. Other methods and probes still use rpc_url.
+# May be read from an environment variable when prefixed with $.
+# tx_ingress_endpoint = "mempool.internal:8546"
 # The WS URL to contact the backend at. Will be read from the environment
 # if an environment variable prefixed with $ is provided.
 ws_url = ""
